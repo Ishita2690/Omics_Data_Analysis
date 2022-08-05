@@ -1,3 +1,11 @@
 # Working with h5ad files
 
 Convert h5ad file to seurat object and some downstream analysis
+
+Required packages:
+
+    reticulate
+    ggplot2
+    SingleCellExperiment
+    scater
+    Seurat
