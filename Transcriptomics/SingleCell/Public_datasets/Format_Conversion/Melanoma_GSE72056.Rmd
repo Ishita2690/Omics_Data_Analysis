@@ -1,0 +1,188 @@
+---
+title: "Melanoma"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+reticulate::py_install("scanpy")
+```
+
+
+```{r}
+sc <- reticulate::import("scanpy")
+```
+
+```{python}
+import scanpy as sc
+```
+
+```{python}
+adata = sc.read_h5ad("GSE72056_GPL18573.h5ad")
+```
+
+```{python}
+sc.pl.umap(adata)
+```
+
+```{r}
+suppressPackageStartupMessages({
+    library("reticulate")
+    library("ggplot2")
+    library("SingleCellExperiment")
+    library("scater")
+    library("Seurat")
+})
+```
+
+
+```{r}
+sce <- SingleCellExperiment(
+    assays      = list(logcounts = t(py$adata$X)),
+    colData     = py$adata$obs,
+    rowData     = py$adata$var,
+    reducedDims = list(umap = py$adata$obsm["X_umap"])
+)
+sce
+```
+
+```{r}
+#saveRDS(mel_seurat, file = "mel_seurat.rds")
+
+```
+```{r}
+# Get the expression matrix
+exprs <- t(py$adata$X)
+colnames(exprs) <- py$adata$obs_names$to_list()
+rownames(exprs) <- py$adata$var_names$to_list()
+# Create the Seurat object
+mel_seurat <- CreateSeuratObject(exprs)
+# Set the expression assay
+mel_seurat <- SetAssayData(mel_seurat, "data", exprs)
+# Add observation metadata
+mel_seurat <- AddMetaData(mel_seurat, py$adata$obs)
+# Add fetaure metadata
+#seurat[["RNA"]][["n_cells"]] <- py$adata$var["n_cells"]
+# Add embedding
+embedding <- py$adata$obsm["X_umap"]
+rownames(embedding) <- py$adata$obs_names$to_list()
+colnames(embedding) <- c("umap_1", "umap_2")
+mel_seurat[["umap"]] <- CreateDimReducObject(embedding, key = "umap_")
+```
+```{r}
+umap1 <- DimPlot(mel_seurat, reduction = "umap", group.by = "malignant_status") + theme(text = element_text(size=20)) + ggtitle("Cell classification (GSE72056)")
+
+png("GSE72056_Melanoma_Umap.png", width = 3200, height = 3332, units = "px", res = 300)
+umap1
+dev.off()
+```
+```{r}
+table(mel_seurat@meta.data$non.malignant_cell_type)
+```
+
+```{r}
+mito.genes <- grep(pattern = "^MT-", x = rownames(mel_seurat@assays[["RNA"]]), value = TRUE)
+percent.mito <- Matrix::colSums(mel_seurat@assays[["RNA"]][mito.genes, ])/Matrix::colSums(mel_seurat@assays[["RNA"]])
+mel_seurat <- AddMetaData(object = mel_seurat, metadata = percent.mito, col.name = "percent.mito") 
+VlnPlot(mel_seurat, features = c("nFeature_RNA", "nCount_RNA", "percent.mito"), ncol = 3,pt.size = -1)
+```
+
+```{r}
+mel_seurat <- FindVariableFeatures(mel_seurat, selection.method = "vst", nfeatures = 2000)
+mel_seurat <- ScaleData(mel_seurat, vars.to.regress = c("percent.mito"))
+mel_seurat <- RunPCA(mel_seurat, features = VariableFeatures(object = mel_seurat))
+ElbowPlot(object = mel_seurat)
+```
+
+```{r}
+mel_seurat <- FindNeighbors(mel_seurat, dims = 1:15)
+mel_seurat <- FindClusters(mel_seurat, resolution = 0.8)
+mel_seurat <- RunUMAP(mel_seurat, dims = 1:15)
+```
+
+
+```{r}
+Idents(mel_seurat) <-  as.factor(mel_seurat@meta.data$non.malignant_cell_type)
+table(mel_seurat@active.ident)
+```
+
+
+```{r}
+Umap2 <- DimPlot(mel_seurat, reduction = "umap", group.by = "non.malignant_cell_type", label = T) + theme(text = element_text(size=20)) + ggtitle("Cell types (GSE72056)")
+
+png("GSE72056_Melanoma_Umap2.png", width = 3200, height = 3332, units = "px", res = 300)
+Umap2
+dev.off()
+```
+
+```{r}
+mel_seurat <- RunTSNE(object = mel_seurat, dims.use = 1:15, do.fast = TRUE)
+```
+
+```{r}
+mel_tsne<-DimPlot(object = mel_seurat, reduction = "tsne", group.by = "non.malignant_cell_type") + theme(text = element_text(size=20)) + ggtitle("Cell types (GSE72056)")
+mel_tsne
+```
+```{r}
+png("GSE72056_Melanoma_TSNE.png", width = 3200, height = 3332, units = "px", res = 300)
+mel_tsne
+dev.off()
+```
+
+```{r}
+DimPlot(object = mel_seurat, reduction = "tsne", group.by = "malignant_status") + theme(text = element_text(size=20)) + ggtitle("Cell classification (GSE72056)")
+
+```
+```{r}
+png("GSE72056_Melanoma_TSNE2.png", width = 3200, height = 3332, units = "px", res = 300)
+dev.off()
+```
+
+
+```{r}
+subclass <- paste(mel_seurat@meta.data$malignant_status, mel_seurat@meta.data$non.malignant_cell_type)
+table(subclass)
+```
+
+
+
+```{r}
+mel_seurat <- AddMetaData(mel_seurat, subclass, 'subclass')
+Idents(mel_seurat) <- mel_seurat@meta.data$subclass
+
+```
+
+```{r}
+mel_seurat_avg <- AverageExpression(mel_seurat,assays = "RNA",slot = "data")
+head(mel_seurat_avg$RNA)
+```
+
+```{r}
+
+mel_seurat_avg_rna <- mel_seurat_avg$RNA
+mel_seurat_avg_rna <- mel_seurat_avg_rna*100
+write.csv(mel_seurat_avg_rna,"TPM_avg_expr_Melanoma_GSE72056_avg_rna_celltypeMalignant.csv",row.names=T)
+```
+
+```{r}
+load("GSE72056_malignant.RData")
+```
+
+
+```{r}
+save.image("GSE72056_malignant.RData")
+```
+
+```{r}
+saveRDS(mel_seurat,"GSE72056_Melanoma_seurat.rds")
+```
+
